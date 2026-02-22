@@ -1,0 +1,41 @@
+{
+  "name": "RPL Serial -> MQTT Bridge",
+  "version": "1.0.0",
+  "slug": "rpl_serial_mqtt_bridge",
+  "description": "Reads JSON messages from an RPL sink via serial and publishes parsed data to MQTT.",
+  "startup": "services",
+  "boot": "auto",
+  "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
+  "host_network": true,
+  "devices": ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/ttyUSB1"],
+  "options": {
+    "baudrate": 115200,
+    "serial_port": "auto",
+    "serial_vid": "auto",
+    "serial_pid": "auto",
+    "json_timeout_s": 2.0,
+    "mqtt_host": "core-mosquitto",
+    "mqtt_port": 1883,
+    "mqtt_username": "",
+    "mqtt_password": "",
+    "mqtt_topic_base": "rpl",
+    "mqtt_retain": true,
+    "publish_per_port": true,
+    "log_raw_lines": false
+  },
+  "schema": {
+    "baudrate": "int(1200,2000000)",
+    "serial_port": "str",
+    "serial_vid": "str",
+    "serial_pid": "str",
+    "json_timeout_s": "float(0.1,60.0)",
+    "mqtt_host": "str",
+    "mqtt_port": "int(1,65535)",
+    "mqtt_username": "str",
+    "mqtt_password": "password",
+    "mqtt_topic_base": "str",
+    "mqtt_retain": "bool",
+    "publish_per_port": "bool",
+    "log_raw_lines": "bool"
+  }
+}
