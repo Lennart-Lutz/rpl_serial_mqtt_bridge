@@ -1,13 +1,13 @@
 {
   "name": "RPL Serial -> MQTT Bridge",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "slug": "rpl_serial_mqtt_bridge",
   "description": "Reads JSON messages from an RPL sink via serial and publishes parsed data to MQTT.",
   "startup": "services",
   "boot": "auto",
   "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
   "host_network": true,
-  "devices": ["/dev/serial/by-id"],
+  "devices": ["/dev/ttyACM0"],
   "options": {
     "baudrate": 115200,
     "serial_port": "auto",
