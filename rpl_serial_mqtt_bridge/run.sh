@@ -1,3 +1,3 @@
-#!/usr/bin/with-contenv sh
+#!/bin/sh
 set -eu
 python -u /app/app.py
