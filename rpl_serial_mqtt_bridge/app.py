@@ -2,21 +2,20 @@
 RPL Serial -> MQTT Bridge
 
 Reads newline-delimited JSON messages from a single RPL sink as serial device,
-dispatches parsing by (type, version), and publishes to MQTT using a stable topic
-schema.
+dispatches parsing by (type, version), and publishes to MQTT.
 
 Topic schema:
 
 Type 0xA3 (163) = Plant Hub v1:
-- rpl/plant_hub/{ID}/port{1-12}      -> raw sensor value as string/int
+- rpl/plant_hub/{ID}/port{1-12}      -> raw sensor value (int as string)
 - rpl/plant_hub/{ID}/conmask         -> scon_bitmap
 - rpl/plant_hub/{ID}/calmask         -> scal_bitmap
 
 General:
-- rpl/stats/{ID}/rank                -> RPL rank (for diagnostics)
+- rpl/stats/{ID}/rank                -> RPL rank (diagnostics)
 
 Extensibility:
-- Add new message types by registering a new parser class in PARSERS.
+- Add new message types by registering a new parser in PARSERS.
 - Add new versions by adding another entry in the version map.
 """
 
@@ -26,23 +25,39 @@ import json
 import time
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List, Protocol
+from typing import Any, Dict, Optional, Tuple, Protocol
 
 import serial
 from serial.tools import list_ports
 import paho.mqtt.client as mqtt
+
 
 OPTIONS_FILE = "/data/options.json"
 
 # Message types
 TYPE_PLANT_HUB = 0xA3  # 163
 
+
 # --------------------------
-# Utility / configuration
+# Logging
 # --------------------------
 
+@dataclass(frozen=True)
+class LogConfig:
+    raw_lines: bool
+    parsed_messages: bool
+    unknown_types: bool
+    mqtt_publishes: bool
+    port_pick: bool
+
 def log(msg: str) -> None:
+    # Single place for printing (HA add-on log)
     print(msg, flush=True)
+
+
+# --------------------------
+# Options / configuration
+# --------------------------
 
 def load_options() -> Dict[str, Any]:
     with open(OPTIONS_FILE, "r", encoding="utf-8") as f:
@@ -62,7 +77,13 @@ def normalize_hex_auto(s: str) -> Optional[int]:
         return int(s, 10)
     return int(s, 16)
 
-def pick_serial_port(port_opt: str, vid_opt: Optional[int], pid_opt: Optional[int]) -> Optional[str]:
+def pick_serial_port(
+    port_opt: str,
+    vid_opt: Optional[int],
+    pid_opt: Optional[int],
+    *,
+    log_cfg: LogConfig,
+) -> Optional[str]:
     """
     Picks the most likely serial device.
 
@@ -77,11 +98,19 @@ def pick_serial_port(port_opt: str, vid_opt: Optional[int], pid_opt: Optional[in
     if not ports:
         return None
 
+    if log_cfg.port_pick:
+        for p in ports:
+            log(f"[DEBUG] Port candidate: {p.device} desc='{p.description}' vid={p.vid} pid={p.pid}")
+
     # If user explicitly configured a port, only accept if present.
     if port_opt and port_opt.lower() != "auto":
         for p in ports:
             if p.device == port_opt:
+                if log_cfg.port_pick:
+                    log(f"[DEBUG] Using explicitly configured serial_port='{port_opt}'")
                 return p.device
+        if log_cfg.port_pick:
+            log(f"[WARN] Configured serial_port='{port_opt}' not found among available ports")
         return None
 
     # Filter by VID/PID if provided
@@ -92,6 +121,7 @@ def pick_serial_port(port_opt: str, vid_opt: Optional[int], pid_opt: Optional[in
         if pid_opt is not None and (p.pid is None or int(p.pid) != int(pid_opt)):
             continue
         candidates.append(p)
+
     if not candidates:
         candidates = ports
 
@@ -102,7 +132,6 @@ def pick_serial_port(port_opt: str, vid_opt: Optional[int], pid_opt: Optional[in
         if "bluetooth" in desc:
             return -999
 
-        # Best signals first
         if "cdc" in desc or "acm" in desc:
             s += 60
         if dev.startswith("/dev/ttyacm"):
@@ -114,10 +143,14 @@ def pick_serial_port(port_opt: str, vid_opt: Optional[int], pid_opt: Optional[in
         return s
 
     candidates.sort(key=score, reverse=True)
-    return candidates[0].device if candidates else None
+
+    chosen = candidates[0].device if candidates else None
+    if log_cfg.port_pick and chosen:
+        log(f"[DEBUG] Auto-picked serial port: {chosen}")
+    return chosen
 
 # --------------------------
-# MQTT publishing
+# MQTT
 # --------------------------
 
 @dataclass(frozen=True)
@@ -143,8 +176,8 @@ def mqtt_connect(cfg: MqttConfig) -> mqtt.Client:
 
     client.connect(cfg.host, cfg.port, keepalive=60)
     client.loop_start()
-    client.publish(status_topic, payload="online", qos=0, retain=True)
 
+    client.publish(status_topic, payload="online", qos=0, retain=True)
     client.publish(
         f"{cfg.topic_base}/bridge/last_start",
         payload=str(int(time.time())),
@@ -155,12 +188,22 @@ def mqtt_connect(cfg: MqttConfig) -> mqtt.Client:
 
 class Publisher:
     """
-    A small wrapper to keep all topic formatting in one place.
+    Thin MQTT wrapper.
+    Topic formatting is intentionally NOT done here (parser-owned).
     """
 
-    def __init__(self, client: mqtt.Client, cfg: MqttConfig):
+    def __init__(self, client: mqtt.Client, cfg: MqttConfig, log_cfg: LogConfig):
         self._client = client
         self._cfg = cfg
+        self._log_cfg = log_cfg
+
+    @property
+    def base(self) -> str:
+        return self._cfg.topic_base
+
+    @property
+    def retain(self) -> bool:
+        return self._cfg.retain
 
     def publish_str(self, topic: str, payload: str, retain: Optional[bool] = None) -> None:
         self._client.publish(
@@ -169,50 +212,34 @@ class Publisher:
             qos=0,
             retain=self._cfg.retain if retain is None else retain,
         )
+        if self._log_cfg.mqtt_publishes:
+            log(f"[DEBUG] MQTT pub topic='{topic}' payload='{payload}' retain={self._cfg.retain if retain is None else retain}")
 
     def publish_int(self, topic: str, payload: int, retain: Optional[bool] = None) -> None:
         self.publish_str(topic, str(int(payload)), retain=retain)
 
-    # ---- Topic schema ----
-
-    def plant_hub_port(self, device_id: int, port_1based: int) -> str:
-        return f"{self._cfg.topic_base}/plant_hub/{device_id}/port{port_1based}"
-
-    def plant_hub_conmask(self, device_id: int) -> str:
-        return f"{self._cfg.topic_base}/plant_hub/{device_id}/conmask"
-
-    def plant_hub_calmask(self, device_id: int) -> str:
-        return f"{self._cfg.topic_base}/plant_hub/{device_id}/calmask"
-
-    def stats_rank(self, device_id: int) -> str:
-        return f"{self._cfg.topic_base}/stats/{device_id}/rank"
+    def publish_json(self, topic: str, payload_obj: Dict[str, Any], retain: Optional[bool] = None) -> None:
+        self.publish_str(topic, json.dumps(payload_obj, separators=(",", ":")), retain=retain)
 
 # --------------------------
 # Parser interface + implementations
 # --------------------------
 
-class ParseResult(Protocol):
-    """
-    Marker protocol; parser implementations can return any structured result they want.
-    For now we publish directly in the parser (simple + explicit topics).
-    """
-    pass
-
 class MessageParser(Protocol):
     """
     Parser interface for a specific (type, version) tuple.
+    Parsers own their MQTT topic schema.
     """
 
     def validate(self, msg: Dict[str, Any]) -> Tuple[bool, str]:
         ...
 
-    def handle(self, msg: Dict[str, Any], pub: Publisher) -> None:
+    def handle(self, msg: Dict[str, Any], pub: Publisher, log_cfg: LogConfig) -> None:
         ...
-
 
 class PlantHubV1Parser:
     """
-    Plant Hub message v1:
+    Plant Hub message v1.
 
     Example:
       {
@@ -253,35 +280,38 @@ class PlantHubV1Parser:
 
         return True, "ok"
 
-    def handle(self, msg: Dict[str, Any], pub: Publisher) -> None:
+    def handle(self, msg: Dict[str, Any], pub: Publisher, log_cfg: LogConfig) -> None:
         device_id = int(msg["id"])
         rank = int(msg["rank"])
         conmask = int(msg["scon_bitmap"])
         calmask = int(msg["scal_bitmap"])
         values = [int(v) for v in msg["sensor_values"]]
 
-        # Stats
-        pub.publish_int(pub.stats_rank(device_id), rank)
+        # ---- Topic building (parser-owned) ----
+        base = pub.base
+
+        # Diagnostics
+        pub.publish_int(f"{base}/stats/{device_id}/rank", rank)
 
         # Masks
-        pub.publish_int(pub.plant_hub_conmask(device_id), conmask)
-        pub.publish_int(pub.plant_hub_calmask(device_id), calmask)
+        pub.publish_int(f"{base}/plant_hub/{device_id}/conmask", conmask)
+        pub.publish_int(f"{base}/plant_hub/{device_id}/calmask", calmask)
 
         # Ports (1..12)
         for i, v in enumerate(values, start=1):
-            pub.publish_int(pub.plant_hub_port(device_id, i), v)
+            pub.publish_int(f"{base}/plant_hub/{device_id}/port{i}", v)
+
+        if log_cfg.parsed_messages:
+            log(f"[INFO] PlantHubV1 parsed: id={device_id} rank={rank} conmask=0x{conmask:04X} calmask=0x{calmask:04X}")
 
 # Registry: TYPE -> VERSION -> parser instance
 PARSERS: Dict[int, Dict[int, MessageParser]] = {
-    TYPE_PLANT_HUB: {
-        1: PlantHubV1Parser(),
-    }
+    TYPE_PLANT_HUB: {1: PlantHubV1Parser()},
 }
 
-def dispatch_message(msg: Dict[str, Any], pub: Publisher) -> None:
+def dispatch_message(msg: Dict[str, Any], pub: Publisher, log_cfg: LogConfig) -> None:
     """
     Finds parser by msg['type'] and msg['version'] and publishes via that parser.
-    Unknown types/versions are ignored (but you could log or publish raw if desired).
     """
     try:
         msg_type = int(msg.get("type", -1))
@@ -291,7 +321,8 @@ def dispatch_message(msg: Dict[str, Any], pub: Publisher) -> None:
 
     type_map = PARSERS.get(msg_type)
     if not type_map:
-        # Unknown type: ignore for now (easy to change later)
+        if log_cfg.unknown_types:
+            log(f"[WARN] Unknown message type={msg_type}. Keys={list(msg.keys())}")
         return
 
     parser = type_map.get(msg_version)
@@ -304,7 +335,7 @@ def dispatch_message(msg: Dict[str, Any], pub: Publisher) -> None:
         log(f"[WARN] Message rejected (type={msg_type} version={msg_version}): {reason}")
         return
 
-    parser.handle(msg, pub)
+    parser.handle(msg, pub, log_cfg)
 
 # --------------------------
 # Serial reader loop
@@ -313,13 +344,21 @@ def dispatch_message(msg: Dict[str, Any], pub: Publisher) -> None:
 def main() -> None:
     opts = load_options()
 
+    # Logging flags
+    log_cfg = LogConfig(
+        raw_lines=bool(opts.get("log_raw_lines", False)),
+        parsed_messages=bool(opts.get("log_parsed_messages", True)),
+        unknown_types=bool(opts.get("log_unknown_types", True)),
+        mqtt_publishes=bool(opts.get("log_mqtt_publishes", False)),
+        port_pick=bool(opts.get("log_port_pick", False)),
+    )
+
     # Serial
     baudrate = int(opts.get("baudrate", 115200))
     port_opt = str(opts.get("serial_port", "auto"))
     vid_opt = normalize_hex_auto(str(opts.get("serial_vid", "auto")))
     pid_opt = normalize_hex_auto(str(opts.get("serial_pid", "auto")))
-    timeout_s = float(opts.get("json_timeout_s", 2.0))
-    log_raw = bool(opts.get("log_raw_lines", False))
+    timeout_s = float(opts.get("serial_timeout_s", 2.0))
 
     # MQTT
     mqtt_cfg = MqttConfig(
@@ -337,10 +376,10 @@ def main() -> None:
     log(f"[INFO] MQTT: {mqtt_cfg.host}:{mqtt_cfg.port} base='{mqtt_cfg.topic_base}' retain={mqtt_cfg.retain}")
 
     mqtt_client = mqtt_connect(mqtt_cfg)
-    pub = Publisher(mqtt_client, mqtt_cfg)
+    pub = Publisher(mqtt_client, mqtt_cfg, log_cfg)
 
     while True:
-        dev = pick_serial_port(port_opt, vid_opt, pid_opt)
+        dev = pick_serial_port(port_opt, vid_opt, pid_opt, log_cfg=log_cfg)
         if not dev:
             log("[WARN] No serial devices found. Retrying in 2s...")
             time.sleep(2)
@@ -359,18 +398,16 @@ def main() -> None:
                     if not s:
                         continue
 
-                    if log_raw:
+                    if log_cfg.raw_lines:
                         log(f"[RAW] {s}")
 
-                    # Your sink prints JSON. We treat each line as a JSON object.
                     try:
                         msg = json.loads(s)
                     except json.JSONDecodeError:
-                        # Ignore non-JSON noise / partial lines
                         continue
 
                     if isinstance(msg, dict):
-                        dispatch_message(msg, pub)
+                        dispatch_message(msg, pub, log_cfg)
 
         except serial.SerialException as e:
             log(f"[WARN] Serial error on {dev}: {e}. Reconnecting in 2s...")
