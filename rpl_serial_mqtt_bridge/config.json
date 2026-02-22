@@ -1,6 +1,6 @@
 {
   "name": "RPL Serial -> MQTT Bridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "slug": "rpl_serial_mqtt_bridge",
   "description": "Reads JSON messages from an RPL sink via serial and publishes parsed data to MQTT.",
   "startup": "services",
