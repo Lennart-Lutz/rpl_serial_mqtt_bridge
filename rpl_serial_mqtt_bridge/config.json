@@ -7,7 +7,7 @@
   "boot": "auto",
   "arch": ["amd64", "aarch64", "armv7", "armhf", "i386"],
   "host_network": true,
-  "devices": ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/ttyUSB1"],
+  "devices": ["/dev/serial/by-id"],
   "options": {
     "baudrate": 115200,
     "serial_port": "auto",
