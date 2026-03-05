@@ -31,7 +31,10 @@ import serial
 from serial.tools import list_ports
 import paho.mqtt.client as mqtt
 
+from discovery import DiscoveryConfig, publish_sensor
+from discovery_store import DiscoveryStore
 
+DISCOVERY_SEEN_FILE = "/data/seen.json"
 OPTIONS_FILE = "/data/options.json"
 
 # Message types
@@ -192,10 +195,12 @@ class Publisher:
     Topic formatting is intentionally NOT done here (parser-owned).
     """
 
-    def __init__(self, client: mqtt.Client, cfg: MqttConfig, log_cfg: LogConfig):
+    def __init__(self, client: mqtt.Client, cfg: MqttConfig, log_cfg: LogConfig, discovery=None, seen=None):
         self._client = client
         self._cfg = cfg
         self._log_cfg = log_cfg
+        self.discovery = discovery
+        self.seen = seen
 
     @property
     def base(self) -> str:
@@ -236,6 +241,83 @@ class MessageParser(Protocol):
 
     def handle(self, msg: Dict[str, Any], pub: Publisher, log_cfg: LogConfig) -> None:
         ...
+
+def ensure_planthub_v1_discovery(pub: Publisher, device_id: int) -> None:
+    if not pub.discovery or not pub.seen:
+        return
+
+    key = f"planthub_v1:{device_id}"
+    if pub.seen.has(key):
+        return
+
+    cfg: DiscoveryConfig = pub.discovery
+    base = pub.base
+
+    device_ident = f"plant_hub_{device_id}"
+    device_name = f"Plant Hub {device_id}"
+
+    # ein availability topic für ALLE Entities dieses Devices
+    avail_topic = f"{base}/plant_hub/{device_id}/availability"
+
+    # 12 ports
+    for i in range(1, 13):
+        publish_sensor(
+            pub,
+            cfg=cfg,
+            object_id=f"{device_ident}_port{i}",
+            unique_id=f"{device_ident}_port{i}",
+            name=f"{device_name} Port {i}",
+            state_topic=f"{base}/plant_hub/{device_id}/port{i}",
+            device_ident=device_ident,
+            device_name=device_name,
+            availability_topic=avail_topic,   # <---
+            unit=None,
+            device_class=None,
+            state_class="measurement",
+        )
+
+    # masks + rank
+    publish_sensor(
+        pub,
+        cfg=cfg,
+        object_id=f"{device_ident}_conmask",
+        unique_id=f"{device_ident}_conmask",
+        name=f"{device_name} ConMask",
+        state_topic=f"{base}/plant_hub/{device_id}/conmask",
+        device_ident=device_ident,
+        device_name=device_name,
+        availability_topic=avail_topic,      # <---
+        state_class=None,
+    )
+    publish_sensor(
+        pub,
+        cfg=cfg,
+        object_id=f"{device_ident}_calmask",
+        unique_id=f"{device_ident}_calmask",
+        name=f"{device_name} CalMask",
+        state_topic=f"{base}/plant_hub/{device_id}/calmask",
+        device_ident=device_ident,
+        device_name=device_name,
+        availability_topic=avail_topic,      # <---
+        state_class=None,
+    )
+    publish_sensor(
+        pub,
+        cfg=cfg,
+        object_id=f"{device_ident}_rank",
+        unique_id=f"{device_ident}_rank",
+        name=f"{device_name} RPL Rank",
+        state_topic=f"{base}/stats/{device_id}/rank",
+        device_ident=device_ident,
+        device_name=device_name,
+        availability_topic=avail_topic,      # <---
+        state_class="measurement",
+    )
+
+    # Device ist "da": availability online (retain!)
+    pub.publish_str(avail_topic, "online", retain=True)
+
+    pub.seen.add(key)
 
 class PlantHubV1Parser:
     """
@@ -286,6 +368,8 @@ class PlantHubV1Parser:
         conmask = int(msg["scon_bitmap"])
         calmask = int(msg["scal_bitmap"])
         values = [int(v) for v in msg["sensor_values"]]
+
+        ensure_planthub_v1_discovery(pub, device_id)
 
         # ---- Topic building (parser-owned) ----
         base = pub.base
@@ -370,13 +454,19 @@ def main() -> None:
         retain=bool(opts.get("mqtt_retain", True)),
     )
 
+    discovery_enable = bool(opts.get("mqtt_discovery_enable", True))
+    discovery_prefix = str(opts.get("mqtt_discovery_prefix", "homeassistant")).rstrip("/")
+
+    seen = DiscoveryStore.load(DISCOVERY_SEEN_FILE) if discovery_enable else None
+    discovery_cfg = DiscoveryConfig(prefix=discovery_prefix, base_topic=mqtt_cfg.topic_base) if discovery_enable else None
+
     log(f"[INFO] Starting bridge (baud={baudrate}, port={port_opt}, timeout={timeout_s}s)")
     if vid_opt is not None or pid_opt is not None:
         log(f"[INFO] Serial filter enabled: VID={vid_opt} PID={pid_opt}")
     log(f"[INFO] MQTT: {mqtt_cfg.host}:{mqtt_cfg.port} base='{mqtt_cfg.topic_base}' retain={mqtt_cfg.retain}")
 
     mqtt_client = mqtt_connect(mqtt_cfg)
-    pub = Publisher(mqtt_client, mqtt_cfg, log_cfg)
+    pub = Publisher(mqtt_client, mqtt_cfg, log_cfg, discovery=discovery_cfg, seen=seen)
 
     while True:
         dev = pick_serial_port(port_opt, vid_opt, pid_opt, log_cfg=log_cfg)
