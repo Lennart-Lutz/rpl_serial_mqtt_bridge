@@ -1,6 +1,6 @@
 {
   "name": "RPL Serial -> MQTT Bridge",
-  "version": "1.2.9",
+  "version": "1.3.0",
   "slug": "rpl_serial_mqtt_bridge",
   "description": "Reads JSON messages from an RPL sink via serial and publishes parsed data to MQTT.",
   "startup": "services",
@@ -22,6 +22,7 @@
     "mqtt_retain": true,
     "mqtt_discovery_enable": true,
     "mqtt_discovery_prefix": "homeassistant",
+    "log_raw_lines": false,
     "log_parsed_messages": true,
     "log_unknown_types": true,
     "log_mqtt_publishes": true,
@@ -41,6 +42,7 @@
     "mqtt_retain": "bool",
     "mqtt_discovery_enable": "bool",
     "mqtt_discovery_prefix": "str",
+    "log_raw_lines": "bool",
     "log_parsed_messages": "bool",
     "log_unknown_types": "bool",
     "log_mqtt_publishes": "bool",
