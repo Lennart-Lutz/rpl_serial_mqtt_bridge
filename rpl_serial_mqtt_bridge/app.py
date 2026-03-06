@@ -176,7 +176,7 @@ def main() -> None:
 
     seen = DiscoveryStore.load(DISCOVERY_SEEN_FILE) if discovery_enabled else None
     discovery_cfg = (
-        DiscoveryConfig(prefix=discovery_prefix, base_topic=mqtt_cfg.topic_base)
+        DiscoveryConfig(prefix=discovery_prefix)
         if discovery_enabled
         else None
     )
