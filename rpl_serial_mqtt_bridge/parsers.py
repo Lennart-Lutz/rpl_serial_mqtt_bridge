@@ -22,6 +22,11 @@ class MessageParser(Protocol):
 
 # ---------------- Parser implementations ----------------
 
+def format_node_id(node_id: int) -> str:
+    """Return the node ID as uppercase hexadecimal string."""
+    return f"{node_id:04X}"
+
+
 def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
     """
     Publish Home Assistant MQTT Discovery entities for a Plant Hub v1 device once.
@@ -39,10 +44,12 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
     cfg: DiscoveryConfig = pub.discovery
     base = pub.base
 
+    node_id_hex = format_node_id(node_id)
+
     # Discovery information
-    device_ident = f"plant_hub_{node_id}"
-    device_name = f"Plant Hub {node_id}"
-    device_availability_topic = f"{base}/plant_hub/{node_id}/availability" # Global device availability
+    device_ident = f"plant_hub_{node_id_hex}"
+    device_name = f"Plant Hub {node_id_hex}"
+    device_availability_topic = f"{base}/plant_hub/{node_id_hex}/availability" # Global device availability
 
     device = DeviceInfo(
         identifiers=[device_ident],
@@ -54,15 +61,15 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
     # ---------------- Port sensors ----------------
 
     for port_index in range(1, 13):
-        port_availability_topic = f"{base}/plant_hub/{node_id}/port{port_index}/availability" # Per-port availability
+        port_availability_topic = f"{base}/plant_hub/{node_id_hex}/port{port_index}/availability" # Per-port availability
 
         publish_sensor(
             pub,
             cfg=cfg,
             object_id=f"{device_ident}_port{port_index}",
             unique_id=f"{device_ident}_port{port_index}",
-            name=f"Port {port_index}",
-            state_topic=f"{base}/plant_hub/{node_id}/port{port_index}",
+            name=f"Pflanze {port_index}",
+            state_topic=f"{base}/plant_hub/{node_id_hex}/port{port_index}",
             availability_topic=port_availability_topic,
             device=device,
             unit=None,
@@ -78,7 +85,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         object_id=f"{device_ident}_conmask",
         unique_id=f"{device_ident}_conmask",
         name=f"ConMask",
-        state_topic=f"{base}/plant_hub/{node_id}/conmask",
+        state_topic=f"{base}/plant_hub/{node_id_hex}/conmask",
         availability_topic=device_availability_topic,
         device=device,
         state_class=None,
@@ -90,7 +97,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         object_id=f"{device_ident}_calmask",
         unique_id=f"{device_ident}_calmask",
         name=f"CalMask",
-        state_topic=f"{base}/plant_hub/{node_id}/calmask",
+        state_topic=f"{base}/plant_hub/{node_id_hex}/calmask",
         availability_topic=device_availability_topic,
         device=device,
         state_class=None,
@@ -102,7 +109,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         object_id=f"{device_ident}_rank",
         unique_id=f"{device_ident}_rank",
         name=f"RPL Rank",
-        state_topic=f"{base}/stats/{node_id}/rank",
+        state_topic=f"{base}/stats/{node_id_hex}/rank",
         availability_topic=device_availability_topic,
         device=device,
         state_class="measurement",
