@@ -10,7 +10,6 @@ class DiscoveryConfig:
     """Global configuration for Home Assistant MQTT Discovery."""
     prefix: str
 
-
 @dataclass(frozen=True)
 class DeviceInfo:
     """Metadata describing a device in Home Assistant."""

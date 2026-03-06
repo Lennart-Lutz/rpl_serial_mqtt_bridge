@@ -42,7 +42,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
     # Discovery information
     device_ident = f"plant_hub_{node_id}"
     device_name = f"Plant Hub {node_id}"
-    availability_topic = f"{base}/plant_hub/{node_id}/availability"
+    device_availability_topic = f"{base}/plant_hub/{node_id}/availability" # Global device availability
 
     device = DeviceInfo(
         identifiers=[device_ident],
@@ -51,7 +51,11 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         model="Plant Hub",
     )
 
+    # ---------------- Port sensors ----------------
+
     for port_index in range(1, 13):
+        port_availability_topic = f"{base}/plant_hub/{node_id}/port{port_index}/availability" # Per-port availability
+
         publish_sensor(
             pub,
             cfg=cfg,
@@ -59,12 +63,14 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
             unique_id=f"{device_ident}_port{port_index}",
             name=f"{device_name} Port {port_index}",
             state_topic=f"{base}/plant_hub/{node_id}/port{port_index}",
-            availability_topic=availability_topic,
+            availability_topic=port_availability_topic,
             device=device,
             unit=None,
             device_class=None,
             state_class="measurement",
         )
+
+    # ---------------- Device-level sensors ----------------
 
     publish_sensor(
         pub,
@@ -73,7 +79,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         unique_id=f"{device_ident}_conmask",
         name=f"{device_name} ConMask",
         state_topic=f"{base}/plant_hub/{node_id}/conmask",
-        availability_topic=availability_topic,
+        availability_topic=device_availability_topic,
         device=device,
         state_class=None,
     )
@@ -85,7 +91,7 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         unique_id=f"{device_ident}_calmask",
         name=f"{device_name} CalMask",
         state_topic=f"{base}/plant_hub/{node_id}/calmask",
-        availability_topic=availability_topic,
+        availability_topic=device_availability_topic,
         device=device,
         state_class=None,
     )
@@ -97,12 +103,13 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
         unique_id=f"{device_ident}_rank",
         name=f"{device_name} RPL Rank",
         state_topic=f"{base}/stats/{node_id}/rank",
-        availability_topic=availability_topic,
+        availability_topic=device_availability_topic,
         device=device,
         state_class="measurement",
     )
 
-    pub.publish_str(availability_topic, "online", retain=True)
+    # Mark the overall device as online once discovery is published.
+    pub.publish_str(device_availability_topic, "online", retain=True)
     pub.seen.add(discovery_key)
 
 class PlantHubV1Parser:
@@ -172,12 +179,26 @@ class PlantHubV1Parser:
 
         base = pub.base
 
+        # ---------------- Device-level state ----------------
+
+        pub.publish_str(f"{base}/plant_hub/{node_id}/availability", "online", retain=True)
+
         pub.publish_int(f"{base}/stats/{node_id}/rank", rank)
         pub.publish_int(f"{base}/plant_hub/{node_id}/conmask", conmask)
         pub.publish_int(f"{base}/plant_hub/{node_id}/calmask", calmask)
 
+        # ---------------- Port states + availability ----------------
+
         for index, value in enumerate(values, start=1):
-            pub.publish_int(f"{base}/plant_hub/{node_id}/port{index}", value)
+            is_connected = bool(conmask & (1 << (index - 1)))
+            port_availability_topic = f"{base}/plant_hub/{node_id}/port{index}/availability"
+            port_state_topic = f"{base}/plant_hub/{node_id}/port{index}"
+
+            if is_connected:
+                pub.publish_str(port_availability_topic, "online", retain=True)
+                pub.publish_int(port_state_topic, value)
+            else:
+                pub.publish_str(port_availability_topic, "offline", retain=True)
 
         if log_cfg.parsed_messages:
             logger(
