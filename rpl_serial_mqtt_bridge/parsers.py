@@ -36,15 +36,15 @@ def ensure_planthub_v1_discovery(pub: Publisher, node_id: int) -> None:
     """
     if not pub.discovery or not pub.seen:
         return
+    
+    node_id_hex = format_node_id(node_id)
 
-    discovery_key = f"planthub_v1:{node_id}"
+    discovery_key = f"planthub_v1:{node_id_hex}"
     if pub.seen.has(discovery_key):
         return
 
     cfg: DiscoveryConfig = pub.discovery
     base = pub.base
-
-    node_id_hex = format_node_id(node_id)
 
     # Discovery information
     device_ident = f"plant_hub_{node_id_hex}"
@@ -183,23 +183,23 @@ class PlantHubV1Parser:
         values = [int(v) for v in msg["sensor_values"]]
 
         ensure_planthub_v1_discovery(pub, node_id)
-
+        node_id_hex = format_node_id(node_id)
         base = pub.base
 
         # ---------------- Device-level state ----------------
 
-        pub.publish_str(f"{base}/plant_hub/{node_id}/availability", "online", retain=True)
+        pub.publish_str(f"{base}/plant_hub/{node_id_hex}/availability", "online", retain=True)
 
-        pub.publish_int(f"{base}/stats/{node_id}/rank", rank)
-        pub.publish_int(f"{base}/plant_hub/{node_id}/conmask", conmask)
-        pub.publish_int(f"{base}/plant_hub/{node_id}/calmask", calmask)
+        pub.publish_int(f"{base}/stats/{node_id_hex}/rank", rank)
+        pub.publish_int(f"{base}/plant_hub/{node_id_hex}/conmask", conmask)
+        pub.publish_int(f"{base}/plant_hub/{node_id_hex}/calmask", calmask)
 
         # ---------------- Port states + availability ----------------
 
         for index, value in enumerate(values, start=1):
             is_connected = bool(conmask & (1 << (index - 1)))
-            port_availability_topic = f"{base}/plant_hub/{node_id}/port{index}/availability"
-            port_state_topic = f"{base}/plant_hub/{node_id}/port{index}"
+            port_availability_topic = f"{base}/plant_hub/{node_id_hex}/port{index}/availability"
+            port_state_topic = f"{base}/plant_hub/{node_id_hex}/port{index}"
 
             if is_connected:
                 pub.publish_str(port_availability_topic, "online", retain=True)
@@ -209,7 +209,7 @@ class PlantHubV1Parser:
 
         if log_cfg.parsed_messages:
             logger(
-                f"[INFO] PlantHubV1 parsed: id={node_id} rank={rank} "
+                f"[INFO] PlantHubV1 parsed: id={node_id_hex} rank={rank} "
                 f"conmask=0x{conmask:04X} calmask=0x{calmask:04X}"
             )
 
